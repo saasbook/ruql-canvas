@@ -1,0 +1,10 @@
+quiz:
+  title: "Will be overridden by argument of 'quiz' in RuQL file"
+  description: "Once you click \"Start quiz\", you must complete the entire quiz within the above time limit. Once you press \"Submit quiz\", your answers cannot be changed, so only click Submit once, when you are sure your answers are final. As a reminder, NO COLLABORATION is allowed on quizzes: closed book, closed Internet, closed friends. Good skill!"
+  quiz_type: assignment
+  show_correct_answers: false
+  shuffle_answers: true
+  time_limit: 60
+  due_at: "2020-08-01T23:00Z"
+  unlock_at: "2020-05-21T00:00Z"
+  published: false
