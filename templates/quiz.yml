@@ -1,6 +1,6 @@
 quiz:
   title: "Will be overridden by argument of 'quiz' in RuQL file"
-  description: "Short description seen when quiz is started",
+  description: "Short description seen when quiz is started"
   quiz_type: assignment
   show_correct_answers: false
   shuffle_answers: true

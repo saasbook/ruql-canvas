@@ -23,7 +23,7 @@ module Ruql
       yaml_options = options.delete('--canvas-config') || raise(Ruql::OptionsError.new("Canvas config file must be provided"))
       yaml = YAML.load_file(yaml_options)
       logger.warn "Doing dry run without making any changes" if
-        (@dry_run = yaml['dry_run'])
+        (@dry_run = yaml['dry_run'] || options['--canvas-dry-run'])
       set_canvas_options(yaml['canvas'])
 
       @quiz_options = YAML.load_file(@default_quiz_options_file)['quiz'].merge(yaml['quiz'] || {})
@@ -43,9 +43,12 @@ module Ruql
     def self.allowed_options
       opts = [
         ['--canvas-config', GetoptLong::REQUIRED_ARGUMENT],
+        ['--canvas-dry-run', GetoptLong::NO_ARGUMENT]
       ]
       help = <<eos
 The Canvas renderer adds the given file as a quiz in Canvas, with these options:
+  --canvas-dry-run  - don't actually change anything, but do all non-state-changing API calls.
+               You can also set dry_run: true in the YAML file instead.
   --canvas-config=file.yml - A Yaml file that must contain at least the following:
     dry_run: true   #  don't actually change anything, but check API connection and parsability
     canvas:
@@ -107,7 +110,21 @@ eos
           'Content-Type' => 'application/json'
         })
     end
-    
+
+    def canvas(description, method, path, data: nil)
+      logger.info "#{method} #{path} #{data}"
+      return if dry_run && method.to_s != 'get'
+      if data
+        response = @canvas.send(method, path, data)
+      else
+        response = @canvas.send(method, path)
+      end
+      if response.success?
+        return response.body
+      else
+        raise CanvasApiError.new("#{description}: #{response.status} #{response.body}")
+      end
+    end
     
     def time_limit_for_points(points)
       # 1 point per minute, add 5 minutes for slop, round up to 5 minutes
@@ -116,22 +133,19 @@ eos
     
     def truncate_quiz!
       # list, then remove, all questions from existing quiz ID
-      path = "courses/#{@course_id}/quizzes/#{@quiz_id}/questions"
-      @response = @canvas.get(path)
-      unless @response.success?
-        raise CanvasApiError.new("Truncating quiz #{@quiz_id}: #{@response.status} #{@response.body}")
+      path = "courses/#{@course_id}/quizzes/#{@quiz_id}"
+      response = canvas("Truncating quiz #{@quiz_id}", :get, path + "/questions")
+      questions = JSON.parse(response)
+      # delete all questions
+      questions.each do |q|
+        qid = q['id']
+        canvas("Delete question #{qid}", :delete, path + "/questions/#{qid}")
       end
-      question_ids = JSON.parse(@response.body). # yields an array of hashes
-        map { |question| question['id'] }
-      question_ids.each do |qid|
-        logger.info "Deleting question #{qid}"
-        next if dry_run
-        @response = @canvas.delete(path + "/#{qid}")
-        unless @response.success?
-          raise CanvasApiError.new("Truncating quiz #{@quiz_id}: #{@response.status} #{@response.body}")
-        end
+      # collect all group numbers, since we have to delete them too
+      group_ids = questions.map { |q| q['quiz_group_id'] }.compact.uniq
+      group_ids.each do |gid|
+        canvas("Delete group #{gid}", :delete, path + "/groups/#{gid}")
       end
-      logger.info "Deleted #{question_ids.length} questions from quiz #{@quiz_id}"
     end
 
     def create_quiz!
@@ -143,15 +157,9 @@ eos
         })
       quiz_object = {:quiz => quiz_opts}.to_json
       path = "courses/#{@course_id}/quizzes"
-      logger.info "POST #{path}\n#{quiz_object}"
-      return if dry_run
-      @response = @canvas.post(path, quiz_object)
-      if @response.success?
-        @quiz_id = JSON.parse(@response.body)['id']
-        logger.info "Created new quiz #{@quiz_id} in course #{@course_id}"
-      else
-        raise CanvasApiError.new("#{@response.status} #{@response.body}")
-      end
+      new_quiz = canvas("Create quiz", :post, path, data: quiz_object)
+      @quiz_id = (dry_run ? 'XXXXX' : JSON.parse(new_quiz)['id'])
+      logger.info "Created new quiz #{@quiz_id} in course #{@course_id}"
     end
 
     def start_new_group(options = {question_points: 1, pick_count: 1})
@@ -160,24 +168,15 @@ eos
         @group_count += 1
       end
       group = { quiz_groups: [ options ] }
-      logger.info "Creating new group with #{group.inspect}"
-      if dry_run
-        @current_group_id = 1000 + rand(1000)
-        logger.info "Pretending new group id is #{@current_group_id}"
-      else
-        @response = @canvas.post("courses/#{@course_id}/quizzes/#{@quiz_id}/groups", group.to_json)
-        unless @response.success?
-          raise CanvasApiError.new("Error creating quiz group: #{@response.status} #{@response.body}")
-        end
-        @current_group_id = JSON.parse(@response.body)['quiz_groups'][0]['id']
-      end
+      resp = canvas("Creating new group with #{group.inspect}", :post, "courses/#{@course_id}/quizzes/#{@quiz_id}/groups", data: group.to_json)
+      @current_group_id = (dry_run ? 1000+rand(1000) : JSON.parse(resp)['quiz_groups'][0]['id'])
     end
 
     # Return a Ruby hash representation of a MCQ for Canvas API.  May be modified by caller
     # before converting to JSON.
     def render_multiple_choice(q,index)
       ans = array_of_answers(q)
-      question_text_key = q.raw? ? :question_text_html : :question_text
+      question_text = q.multiple ? '(Select all that apply.) ' + q.question_text : q.question_text
       question_type = q.multiple ? 'multiple_answers_question' : 'multiple_choice_question'
       comments_key = q.raw? ? :incorrect_comments_html : :incorrect_comments_text
 
@@ -186,8 +185,7 @@ eos
         :question_name => "#{q.points} point#{'s' if q.points > 1}",
         :question_type => question_type,
         :points_possible =>  q.points,
-        question_text_key => q.question_text,
-        comments_key => "Answer explanation <b>with bold</b>",
+        :question_text => question_text,
         :position => 10000,
         :answers => ans
       }
@@ -197,26 +195,18 @@ eos
     def array_of_answers(question)
       question.answers.map do |answer|
         weight = answer.correct? ? 100 : 0
-        text_key = question.raw? ? 'html' : 'answer_text'
+        text_key = question.raw? ? :answer_html : :answer_text
         { text_key => answer.answer_text,
-          :answer_weight => weight }
+          :answer_weight => weight
+        }
       end
     end
     
     def add_question_to_current_group(question)
       question_json = question.to_json
-      logger.info "Adding to group #{@current_group_id}:\n#{question_json}"
-      if dry_run
-        @qcount += 1
-      else
-        @response = @canvas.post("courses/#{@course_id}/quizzes/#{@quiz_id}/questions", question_json)
-
-        if @response.success?
-          @qcount += 1
-        else
-          raise CanvasApiError.new("Error adding question: #{@response.status} #{@response.body}")
-        end
-      end
+      canvas("Adding to group #{@current_group_id}:\n#{question_json}", :post,
+        "courses/#{@course_id}/quizzes/#{@quiz_id}/questions", data: question_json)
+      @qcount += 1
     end
 
   end
