@@ -43,7 +43,7 @@ module Ruql
     def self.allowed_options
       opts = [
         ['--canvas-config', GetoptLong::REQUIRED_ARGUMENT],
-        ['--canvas-dry-run', GetoptLong::NO_ARGUMENT]
+        ['--canvas-dry-run', GetoptLong::NO_ARGUMENT],
       ]
       help = <<eos
 The Canvas renderer adds the given file as a quiz in Canvas, with these options:
@@ -81,17 +81,25 @@ eos
     def render_quiz
       if @quiz_id
         truncate_quiz!
-        @output = "to existing quiz #{@quiz_id}"
+        @output = "Existing quiz #{@quiz_id}"
       else
         create_quiz!
-        @output = "to new quiz #{@quiz_id}"
+        @output = "New quiz #{@quiz_id}"
       end
-      quiz.questions.each_with_index do |q,i|
-        start_new_group
-        canvas_question = render_multiple_choice(q,i)
+      quiz.ungrouped_questions.each do |q|
+        canvas_question = render_multiple_choice(q)
         add_question_to_current_group(canvas_question)
       end
-      @output = "Added #{@qcount} questions in #{@group_count} pool(s) to #{@output}"
+      current_group = nil
+      quiz.grouped_questions.each do |q|
+        if q.question_group != current_group
+          start_new_group(:name => "Group:#{q.question_group}", :question_points => q.points)
+          current_group = q.question_group
+        end
+        canvas_question = render_multiple_choice(q)
+        add_question_to_current_group(canvas_question)
+      end
+      @output << " now has #{@qcount} questions in #{@group_count} pool(s)"
     end
     #####
 
@@ -126,9 +134,12 @@ eos
       end
     end
     
-    def time_limit_for_points(points)
-      # 1 point per minute, add 5 minutes for slop, round up to 5 minutes
-      5 * (points.to_i / 5 + 1)
+    def time_limit_for_quiz
+      # intent is 1 point per minute, add 5 minutes for slop, round total up to nearest 5 minutes
+      # but # questions is really # unique groups.
+      limit =  5 * (quiz.points.to_i / 5 + 1)
+      logger.info "Time limit #{limit} based on #{quiz.points} grouped points"
+      limit
     end
     
     def truncate_quiz!
@@ -151,7 +162,7 @@ eos
     def create_quiz!
       quiz_opts = @quiz_options.merge({
           'title' => quiz.title,
-          'time_limit' => time_limit_for_points(quiz.points),
+          'time_limit' => time_limit_for_quiz,
           'due_at' => "2020-08-01T23:00Z",
           'unlock_at' => "2020-05-21T00:00Z"
         })
@@ -162,19 +173,19 @@ eos
       logger.info "Created new quiz #{@quiz_id} in course #{@course_id}"
     end
 
-    def start_new_group(options = {question_points: 1, pick_count: 1})
-      unless options.has_key?(:name)
-        options[:name] = "group:#{@group_count}"
-        @group_count += 1
-      end
+    def start_new_group(options = {})
+      options[:question_points] ||= 1
+      options[:pick_count] ||= 1
+      options[:name] ||= "group:#{@group_count}"
       group = { quiz_groups: [ options ] }
       resp = canvas("Creating new group with #{group.inspect}", :post, "courses/#{@course_id}/quizzes/#{@quiz_id}/groups", data: group.to_json)
       @current_group_id = (dry_run ? 1000+rand(1000) : JSON.parse(resp)['quiz_groups'][0]['id'])
+      @group_count += 1
     end
 
     # Return a Ruby hash representation of a MCQ for Canvas API.  May be modified by caller
     # before converting to JSON.
-    def render_multiple_choice(q,index)
+    def render_multiple_choice(q)
       ans = array_of_answers(q)
       question_text = q.multiple ? '(Select all that apply.) ' + q.question_text : q.question_text
       question_type = q.multiple ? 'multiple_answers_question' : 'multiple_choice_question'

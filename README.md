@@ -1,8 +1,7 @@
 # Ruql::Canvas
 
-Welcome to your new gem! In this directory, you'll find the files you need to be able to package up your Ruby library into a gem. Put your Ruby code in the file `lib/ruql/canvas`. To experiment with that code, run `bin/console` for an interactive prompt.
-
-TODO: Delete this and the text above, and describe your gem
+This formatter requires [ruql](https://github.com/saasbook/ruql) and
+allos uploading RuQL quizzes into the Canvas LMS using its REST API.
 
 ## Installation
 
@@ -22,7 +21,21 @@ Or install it yourself as:
 
 ## Usage
 
-TODO: Write usage instructions here
+Prior to processing a quiz file, you'll need to create a simple `.yml`
+file containing information about connecting to your Canvas instance's
+API endpoint.  Say `ruql canvas -h` for help on the file contents.
+
+The file also lets you specify all the features of a Canvas quiz, such
+as start time, whether to show one question at a time, etc.  Of course
+you can change these manually after the quiz is uploaded.
+
+If you specify an existing quiz ID, that quiz will be completely
+truncated and its contents replaced with the one you're processing.
+This is useful for modifying a quiz "in place" when external links to
+the quiz ID already exist.
+
+If you turn on verbose mode (`--verbose` or `-V`) when running `ruql`,
+you can see the REST requests being made against Canvas.
 
 ## Development
 
