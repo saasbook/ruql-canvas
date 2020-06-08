@@ -1,10 +1,16 @@
+# See canvas.instructure.com/doc/api/quizzes.html for valid values
 quiz:
   title: "Will be overridden by argument of 'quiz' in RuQL file"
   description: "Short description seen when quiz is started"
   quiz_type: assignment
   show_correct_answers: false
   shuffle_answers: true
-  time_limit: 60
-  due_at: "2020-08-01T23:00Z"
-  unlock_at: "2020-05-21T00:00Z"
+  due_at:    "2030-01-01T00:00Z"
+  unlock_at: "2030-01-01T00:00Z"
+  lock_at:   "2030-01-01T00:00Z"
   published: false
+  # when can student see correct answer and results? (see Canvas docs)
+  hide_results: always
+  one_question_at_a_time: false
+  # to put it into an assignment group:
+  # assignment_group_id: 9999

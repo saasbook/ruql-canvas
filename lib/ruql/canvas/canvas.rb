@@ -24,9 +24,11 @@ module Ruql
       yaml = YAML.load_file(yaml_options)
       logger.warn "Doing dry run without making any changes" if
         (@dry_run = yaml['dry_run'] || options['--canvas-dry-run'])
-      set_canvas_options(yaml['canvas'])
+      @canvas_options = yaml['canvas']
+      set_canvas_options(@canvas_options)
 
       @quiz_options = YAML.load_file(@default_quiz_options_file)['quiz'].merge(yaml['quiz'] || {})
+      @quiz_id = @quiz_options['quiz_id'] # may be nil if new quiz is to be created.
       logger.info "Using quiz options:\n#{@quiz_options.inspect}"
 
       verify_valid_quiz!
@@ -48,16 +50,20 @@ module Ruql
       help = <<eos
 The Canvas renderer adds the given file as a quiz in Canvas, with these options:
   --canvas-dry-run  - don't actually change anything, but do all non-state-changing API calls.
-               You can also set dry_run: true in the YAML file instead.
+               You can also set dry_run: true in the YAML file instead.  The presence of either
+               mechanism will turn this into a dry run.
   --canvas-config=file.yml - A Yaml file that must contain at least the following:
     dry_run: true   #  don't actually change anything, but check API connection and parsability
     canvas:
       api_base: https://bcourses.berkeley.edu/api/v1 # base URL for Canvas LMS API
       auth_token: 012345    #  Bearer auth token for Canvas API
       course_id: 99999      #  Course ID in Canvas to which a NEW quiz should be added
-      # If a quiz_id is given and exists within that course, that quiz's contents
-      # will be completely replaced, otherwise a new quiz will be created:
-      quiz_id: 99999 
+      # If quiz_id given, replace that quiz's questions and time limit; if not, create new
+      quiz_id: 99999
+      #  How quiz time limit is set, eg 20-point quiz = 40 minutes. Default is 1
+      minutes_per_point: 2  
+      # Fixed extra time in addition to minutes/point. Default 5. Total time rounded up to multiple of 5.
+      extra_minutes: 5
     quiz:
       # various options that control quiz; defaults are in #{@default_quiz_options_file}
 eos
@@ -86,10 +92,32 @@ eos
         create_quiz!
         @output = "New quiz #{@quiz_id}"
       end
-      quiz.ungrouped_questions.each do |q|
-        canvas_question = render_multiple_choice(q)
-        add_question_to_current_group(canvas_question)
+      emit_ungrouped_questions
+      emit_grouped_questions
+      @output << " now has #{@qcount} questions in #{@group_count} pool(s)"
+    end
+    #####
+
+    
+    private
+
+    # all "ungrouped" questions go into a single big group that can be shuffled.
+    # Caveat 1: where groups are typically "pick 1 of the following N", this big group has to be "pick N of the
+    #   following N" so that all questions are presented, just in a shuffled order.
+    # Caveat 2: all questions in a group must be worth same # points, so we actually have to subdivide
+    #   ungrouped questions into subgroups by point value.
+    def emit_ungrouped_questions
+      ungrouped_question_sets = quiz.ungrouped_questions.group_by(&:points)
+      ungrouped_question_sets.each_pair do |points,questions|
+        start_new_group(:name => "Group:unpooled:#{points}", :pick_count => questions.length, :question_points => points)
+        questions.each do |q|
+          canvas_question = render_multiple_choice(q)
+          add_question_to_current_group(canvas_question)
+        end
       end
+    end
+
+    def emit_grouped_questions
       current_group = nil
       quiz.grouped_questions.each do |q|
         if q.question_group != current_group
@@ -99,12 +127,8 @@ eos
         canvas_question = render_multiple_choice(q)
         add_question_to_current_group(canvas_question)
       end
-      @output << " now has #{@qcount} questions in #{@group_count} pool(s)"
     end
-    #####
-
-    private
-
+    
     def set_canvas_options(canvas)
       @course_id = canvas['course_id'] || raise(Ruql::OptionsError.new("course_id missing from config file"))
       @quiz_id = canvas['quiz_id'] # may be nil => create new quiz
@@ -137,8 +161,12 @@ eos
     def time_limit_for_quiz
       # intent is 1 point per minute, add 5 minutes for slop, round total up to nearest 5 minutes
       # but # questions is really # unique groups.
-      limit =  5 * (quiz.points.to_i / 5 + 1)
-      logger.info "Time limit #{limit} based on #{quiz.points} grouped points"
+      minutes_per_point = (@canvas_options['minutes_per_point'] || 1).to_i
+      slop = (@canvas_options['extra_minutes'] || 5).to_i
+      limit =  quiz.points.to_i * minutes_per_point + slop
+      # round up to 5 minutes
+      limit += 5 - (limit % 5)
+      logger.info "Time limit #{limit} based on #{quiz.points} points"
       limit
     end
     
@@ -157,14 +185,19 @@ eos
       group_ids.each do |gid|
         canvas("Delete group #{gid}", :delete, path + "/groups/#{gid}")
       end
+      # modify time limit to reflect the questions we're about to replace them with
+      # and update quiz title
+      update_quiz = {'quiz' => {
+          'title' => quiz.title,
+          'time_limit' => time_limit_for_quiz
+        }}.to_json
+      canvas("Update quiz title and time limit", :put, path, data: update_quiz)
     end
 
     def create_quiz!
       quiz_opts = @quiz_options.merge({
           'title' => quiz.title,
           'time_limit' => time_limit_for_quiz,
-          'due_at' => "2020-08-01T23:00Z",
-          'unlock_at' => "2020-05-21T00:00Z"
         })
       quiz_object = {:quiz => quiz_opts}.to_json
       path = "courses/#{@course_id}/quizzes"
