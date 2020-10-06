@@ -1,1 +1,0 @@
-curl -X POST -H Authorization: Bearer 1072~v2YlFRSHpWOC7Sm8ovy6W5GiDTzlSBc6EDH7CtPKiRje0jH2PAKj7L8C2b0SwxQ4 -H Content-Type: application/json -d @quiz.json https://bcourses.berkeley.edu/api/v1/courses/1487863/quizzes

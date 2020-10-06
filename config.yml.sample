@@ -1,0 +1,29 @@
+# Uncomment the dry_run line to try/show what would be done, but not actually make changes:
+#dry_run: true
+canvas:
+  # replace with your institution's Canvas API base:
+  api_base: https://bcourses.yourschool.edu/api/v1
+  # replace with an auth_token you generate while logged into Canvas:
+  auth_token: "LONG_AUTH_TOKEN"
+  # replace with canvas Course ID of your course
+  course_id: 1487863
+  # replace with existing Quiz ID, or if omitted, will create new quiz
+  quiz_id:  2311075
+
+# Properties of the quiz - can be changed using canvas GUI after import:
+
+quiz:
+  # Description shown to students when quiz started
+  description: "You must now complete the entire quiz within the given time limit. Your work is automatically saved periodically, but once you press Submit Quiz, your answers cannot be changed.  So only click Submit once, when you are sure your answers are final. As a reminder, NO COLLABORATION is allowed on quizzes: closed book, closed Internet, closed friends. Good skill!"
+  # Most quizzes show up as "assignments" in canvas; see canvas API docs
+  quiz_type: assignment
+  # Should student see correct answer after submitting their own?
+  show_correct_answers: false
+  # Randomize order of answers?
+  shuffle_answers: true
+  # Quiz due date
+  due_at: "2020-08-01T23:00Z"
+  # When students can first access quiz
+  unlock_at: "2020-05-21T00:00Z"
+  # Initially published or not?
+  published: false
